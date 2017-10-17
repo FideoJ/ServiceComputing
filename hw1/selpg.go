@@ -14,34 +14,33 @@ type selpg_args struct {
 	start_page  int
 	end_page    int
 	in_filename string
-	page_len    int /* default value, can be overriden by "-l number" on command
-	   line */
-	page_type int /* 'l' for lines-delimited, 'f' for form-feed-delimited */
-	/* default is 'l' */
-	print_dest string
+	page_len    int
+	page_type   int
+	print_dest  string
 }
 
 var progname string
+var err error
 
 func main() {
 	progname = os.Args[0]
 
 	var sa selpg_args
-	process_args(&sa)
+	processArgs(&sa)
 
 	fmt.Printf("sa = %+v\n", sa)
 
-	process_input(&sa)
+	processInput(&sa)
 }
 
-func err_exit(err error) {
+func errExit() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL ERROR: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func process_args(sa *selpg_args) {
+func processArgs(sa *selpg_args) {
 	flag.IntVarP(&sa.start_page, "start-page", "s", -1, "start page number")
 	flag.IntVarP(&sa.end_page, "end-page", "e", -1, "end page number")
 	//
@@ -55,31 +54,27 @@ func process_args(sa *selpg_args) {
 	}
 }
 
-func process_input(sa *selpg_args) {
-	var in_fd *os.File
-	var reader *bufio.Reader
-	var writer io.WriteCloser
-	var output io.ReadCloser
-	var err error
+func processInput(sa *selpg_args) {
+	var writer io.Writer
+	var sub_proc *exec.Cmd
 	var line_ctr, page_ctr int
 
-	if sa.in_filename == "" {
-		in_fd = os.Stdin
-	} else {
+	in_fd := os.Stdin
+	if len(sa.in_filename) > 0 {
 		in_fd, err = os.Open(sa.in_filename)
-		err_exit(err)
-		reader = bufio.NewReaderSize(in_fd, 16*1024)
+		errExit()
 	}
+	reader := bufio.NewReaderSize(in_fd, 16*1024)
 
-	if sa.print_dest == "" {
-		writer = os.Stdout
-	} else {
-		// cmd := exec.Command("lp -d" + sa.print_dest)
-		cmd := exec.Command("wc", "-l")
-		writer, err = cmd.StdinPipe()
-		err_exit(err)
-		output, err = cmd.StdoutPipe()
-		cmd.Start()
+	writer = os.Stdout
+	if len(sa.print_dest) > 0 {
+		// sub_proc := exec.Command("lp", "-d", print_dest)
+		sub_proc = exec.Command("wc", "-l")
+		writer, err = sub_proc.StdinPipe()
+		errExit()
+		sub_proc.Stdout = os.Stdout
+		sub_proc.Stderr = os.Stderr
+		sub_proc.Start()
 	}
 
 	if sa.page_type == 'l' {
@@ -87,21 +82,18 @@ func process_input(sa *selpg_args) {
 		page_ctr = 1
 
 		for {
-			line, is_prefix, err := reader.ReadLine()
+			line, err := reader.ReadString('\n')
 			if err == io.EOF {
 				break
 			}
-			err_exit(err)
+			errExit()
 
-			if !is_prefix {
-				line_ctr++
-			}
 			if line_ctr > sa.page_len {
 				page_ctr++
 				line_ctr = 1
 			}
 			if (page_ctr >= sa.start_page) && (page_ctr <= sa.end_page) {
-				writer.Write(line)
+				fmt.Fprintf(writer, line)
 			}
 		}
 	} else {
@@ -111,7 +103,7 @@ func process_input(sa *selpg_args) {
 			if err == io.EOF {
 				break
 			}
-			err_exit(err)
+			errExit()
 
 			if c == '\f' {
 				page_ctr++
@@ -132,13 +124,9 @@ func process_input(sa *selpg_args) {
 			progname, sa.end_page, page_ctr)
 	}
 
-	if sa.print_dest != "" {
-		var n int
-		out := make([]byte, 16*1024)
-		n, err = output.Read(out)
-		err_exit(err)
-
-		fmt.Println("OUTPUT IN DEST:", string(out[:n]))
+	if sub_proc != nil {
+		writer.(io.WriteCloser).Close()
+		sub_proc.Wait()
 	}
 	fmt.Fprintf(os.Stderr, "%s: done\n", progname)
 }
