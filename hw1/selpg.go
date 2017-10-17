@@ -66,7 +66,9 @@ func processInput(sa *selpg_args) {
 	warnAtPageCount(page_count, sa)
 
 	if sub_proc != nil {
+		// 关闭管道写端以使子进程终止
 		writer.(io.WriteCloser).Close()
+		// 回收子进程
 		sub_proc.Wait()
 	}
 	fmt.Fprintf(os.Stderr, "%s: done\n", progname)

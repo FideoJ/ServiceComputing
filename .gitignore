@@ -1,3 +1,4 @@
 *
 !hw*/
 !hw*/*.go
+!hw*/README.md
