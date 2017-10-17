@@ -11,12 +11,12 @@ import (
 )
 
 type selpg_args struct {
-	start_page  int
-	end_page    int
-	in_filename string
-	page_len    int
-	page_type   int
-	print_dest  string
+	start_page          int
+	end_page            int
+	in_filename         string
+	page_len            int
+	form_feed_delimited bool
+	print_dest          string
 }
 
 var progname string
@@ -42,7 +42,7 @@ func processArgs(sa *selpg_args) {
 	flag.IntVarP(&sa.start_page, "start-page", "s", 1, "start page number")
 	flag.IntVarP(&sa.end_page, "end-page", "e", 1, "end page number")
 	flag.IntVarP(&sa.page_len, "page-length", "l", 72, "lines per page")
-	flag.IntVarP(&sa.page_type, "form-feed-delimited", "f", 'l', "form feed delimited")
+	flag.BoolVarP(&sa.form_feed_delimited, "form-feed-delimited", "f", false, "form feed delimited")
 	flag.StringVarP(&sa.print_dest, "print-dest", "d", "", "print dest")
 	flag.Parse()
 	sa.in_filename = ""
@@ -57,7 +57,7 @@ func processInput(sa *selpg_args) {
 	reader := makeReader(sa)
 	writer, sub_proc := makeWriter(sa)
 
-	if sa.page_type == 'l' {
+	if !sa.form_feed_delimited {
 		page_count = pagingL(reader, &writer, sa)
 	} else {
 		page_count = pagingF(reader, &writer, sa)
