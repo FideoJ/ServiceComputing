@@ -27,9 +27,7 @@ func main() {
 
 	var sa selpg_args
 	processArgs(&sa)
-
-	fmt.Printf("sa = %+v\n", sa)
-
+	// fmt.Printf("sa = %+v\n", sa)
 	processInput(&sa)
 }
 
@@ -41,9 +39,8 @@ func errExit() {
 }
 
 func processArgs(sa *selpg_args) {
-	flag.IntVarP(&sa.start_page, "start-page", "s", -1, "start page number")
-	flag.IntVarP(&sa.end_page, "end-page", "e", -1, "end page number")
-	//
+	flag.IntVarP(&sa.start_page, "start-page", "s", 1, "start page number")
+	flag.IntVarP(&sa.end_page, "end-page", "e", 1, "end page number")
 	flag.IntVarP(&sa.page_len, "page-length", "l", 72, "lines per page")
 	flag.IntVarP(&sa.page_type, "form-feed-delimited", "f", 'l', "form feed delimited")
 	flag.StringVarP(&sa.print_dest, "print-dest", "d", "", "print dest")
@@ -55,78 +52,104 @@ func processArgs(sa *selpg_args) {
 }
 
 func processInput(sa *selpg_args) {
-	var writer io.Writer
-	var sub_proc *exec.Cmd
-	var line_ctr, page_ctr int
+	var page_count int
 
-	in_fd := os.Stdin
-	if len(sa.in_filename) > 0 {
-		in_fd, err = os.Open(sa.in_filename)
-		errExit()
-	}
-	reader := bufio.NewReaderSize(in_fd, 16*1024)
-
-	writer = os.Stdout
-	if len(sa.print_dest) > 0 {
-		// sub_proc := exec.Command("lp", "-d", print_dest)
-		sub_proc = exec.Command("wc", "-l")
-		writer, err = sub_proc.StdinPipe()
-		errExit()
-		sub_proc.Stdout = os.Stdout
-		sub_proc.Stderr = os.Stderr
-		sub_proc.Start()
-	}
+	reader := makeReader(sa)
+	writer, sub_proc := makeWriter(sa)
 
 	if sa.page_type == 'l' {
-		line_ctr = 0
-		page_ctr = 1
-
-		for {
-			line, err := reader.ReadString('\n')
-			if err == io.EOF {
-				break
-			}
-			errExit()
-
-			if line_ctr > sa.page_len {
-				page_ctr++
-				line_ctr = 1
-			}
-			if (page_ctr >= sa.start_page) && (page_ctr <= sa.end_page) {
-				fmt.Fprintf(writer, line)
-			}
-		}
+		page_count = pagingL(reader, &writer, sa)
 	} else {
-		page_ctr = 1
-		for {
-			c, err := reader.ReadByte()
-			if err == io.EOF {
-				break
-			}
-			errExit()
-
-			if c == '\f' {
-				page_ctr++
-			}
-			if (page_ctr >= sa.start_page) && (page_ctr <= sa.end_page) {
-				writer.Write([]byte{c})
-			}
-		}
+		page_count = pagingF(reader, &writer, sa)
 	}
 
-	if page_ctr < sa.start_page {
-		fmt.Fprintf(os.Stderr, "%s: start_page (%d) greater than total pages (%d),"+
-			" no output written\n",
-			progname, sa.start_page, page_ctr)
-	} else if page_ctr < sa.end_page {
-		fmt.Fprintf(os.Stderr, "%s: end_page (%d) greater than total pages (%d),"+
-			" less output than expected\n",
-			progname, sa.end_page, page_ctr)
-	}
+	warnAtPageCount(page_count, sa)
 
 	if sub_proc != nil {
 		writer.(io.WriteCloser).Close()
 		sub_proc.Wait()
 	}
 	fmt.Fprintf(os.Stderr, "%s: done\n", progname)
+}
+
+func makeReader(sa *selpg_args) *bufio.Reader {
+	in_fd := os.Stdin
+	if len(sa.in_filename) > 0 {
+		in_fd, err = os.Open(sa.in_filename)
+		errExit()
+	}
+	return bufio.NewReaderSize(in_fd, 16*1024)
+}
+
+func makeWriter(sa *selpg_args) (io.Writer, *exec.Cmd) {
+	var writer io.Writer
+	var sub_proc *exec.Cmd
+
+	writer = os.Stdout
+	if len(sa.print_dest) > 0 {
+		// sub_proc := exec.Command("lp", "-d", print_dest)
+		// 使用"cat -n"代替
+		sub_proc = exec.Command("cat", "-n")
+		writer, err = sub_proc.StdinPipe()
+		errExit()
+		sub_proc.Stdout = os.Stdout
+		sub_proc.Stderr = os.Stderr
+		sub_proc.Start()
+	}
+	return writer, sub_proc
+}
+
+func pagingL(reader *bufio.Reader, writer *io.Writer, sa *selpg_args) int {
+	var line string
+	line_ctr := 0
+	page_ctr := 1
+
+	for {
+		line, err = reader.ReadString('\n')
+		if err == io.EOF {
+			break
+		}
+		errExit()
+
+		line_ctr++
+		if line_ctr > sa.page_len {
+			page_ctr++
+			line_ctr = 1
+		}
+		if (page_ctr >= sa.start_page) && (page_ctr <= sa.end_page) {
+			fmt.Fprintf(*writer, line)
+		}
+	}
+	return page_ctr
+}
+
+func pagingF(reader *bufio.Reader, writer *io.Writer, sa *selpg_args) int {
+	var page string
+	page_ctr := 1
+
+	for {
+		page, err = reader.ReadString('\f')
+		if err == io.EOF {
+			break
+		}
+		errExit()
+
+		page_ctr++
+		if (page_ctr >= sa.start_page) && (page_ctr <= sa.end_page) {
+			fmt.Fprintf(*writer, page)
+		}
+	}
+	return page_ctr
+}
+
+func warnAtPageCount(page_count int, sa *selpg_args) {
+	if page_count < sa.start_page {
+		fmt.Fprintf(os.Stderr, "%s: start_page (%d) greater than total pages (%d),"+
+			" no output written\n",
+			progname, sa.start_page, page_count)
+	} else if page_count < sa.end_page {
+		fmt.Fprintf(os.Stderr, "%s: end_page (%d) greater than total pages (%d),"+
+			" less output than expected\n",
+			progname, sa.end_page, page_count)
+	}
 }
